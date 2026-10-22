@@ -43,10 +43,21 @@ texture bkgd_fiberswoosh        stripes clear   50
 texture bkgd_swoosh-fiber       clamp   clamp   50
 texture bkgd-arc                clamp   clamp   50
 texture bkgd-arc-50             clamp   clamp   50
+# The track loading pictures (Loading_Track_bkgd, DXT5): striped panel, the
+# track photo on the right, like the menus. The game draws the first 640
+# texels of them however wide the picture is, so the widened art is fitted
+# back into those 640 and the picture spans (loadgame, below).
+texture load_*                  stripes clear   100 fit
 # Smooth gradients and glows: the edge carries on.
 texture bkgd_grayshaded         clamp   clamp   50
 texture bkgd_carselect          clamp   clamp   50
 texture bkgd_win_car            clamp   clamp   50
+
+# The race's own windows hold its HUD, which the game already lays out for
+# 16:9 and places from the window's size: spanning the window took the lap
+# counter, the place and the speedometer off the screen.
+gamewindow            keep
+gameviewoverlaywindow keep
 
 # The frame every front-end screen sits in (UIFrontEndBackground.ini). Its
 # root draws the black bands and coloured bars across its own rectangle. It
@@ -71,3 +82,10 @@ uifrontendbackground CareerInfo\Money\Left               + 213.3333
 uifrontendbackground CareerInfo\CarName\Left             + 106.6667
 uifrontendbackground CareerInfo\DriveType\Left           + 106.6667
 uifrontendbackground CareerInfo\PerformanceSubclass\Left + 106.6667
+
+# The track loading screen. Its picture spans with its texture rectangle
+# left at 640 (the art is fitted into those, above); its root has spanned,
+# so the picture's Left stays.
+loadgame LoadingBackground\Left                 + 0
+loadgame LoadingBackground\Width                span
+loadgame LoadingBackground\TextureRect\Width    = 640

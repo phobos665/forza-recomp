@@ -28,8 +28,9 @@ without that on your platform stops presenting frames after "New profile".
   for 16:9 as they load: the frame (bands, headings, button prompts) runs to
   the edges, and the background art is widened from your own disc, its
   stripes carried on rather than stretched (`layout/widescreen.txt`,
-  `src/fz_layout.c`, `src/fz_backdrop.c`). Some screens still have pieces at
-  4:3: the track loading screen's panel and Select Car's lists.
+  `src/fz_layout.c`, `src/fz_backdrop.c`), the track loading pictures
+  included. The content of each menu still sits in the 4:3 middle; moving it
+  into the wider space, screen by screen, is next.
 
 Not yet checked: a race to the finish, the other modes, saving and loading,
 and the sound by ear.

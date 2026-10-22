@@ -22,9 +22,10 @@ int  fz_layout_active(void);
 int  fz_layout_line(char *line, size_t cap, char *extra, size_t extra_cap);
 
 /* Whether the background at `path` (w x h texels) is widened for 16:9, and
- * if so how: the new columns on each side and how each side is made. */
+ * if so how: the new columns on each side, how each side is made, and
+ * whether the result is squeezed back into the old width (fit). */
 int  fz_layout_texture_recipe(const char *path, uint32_t w, uint32_t h,
                               uint32_t *add_left, FzFill *left,
-                              uint32_t *add_right, FzFill *right);
+                              uint32_t *add_right, FzFill *right, int *fit);
 
 #endif

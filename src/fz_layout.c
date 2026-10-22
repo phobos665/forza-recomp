@@ -33,17 +33,28 @@
  * loads them (fz_backdrop.c), each by a recipe:
  *
  *   texture <name> <left fill> <right fill> [<percent of the new columns on
- *           the left, 50 by default>]
+ *           the left, 50 by default> [fit]]
  *
- * name is the file's name without .xpr, any case, or "default" for a
- * background (a bkgd* file) with no recipe of its own. Fills are stripes,
- * clamp and clear (fz_backdrop.c).
+ * "fit" squeezes the widened picture back into the texture's old width, for
+ * a picture the game draws from a fixed part of its texture whatever the
+ * layout says (the track loading pictures): drawn 4/3 wider across the
+ * spanned control, it comes out in proportion.
  *
- * And one switch, "* span-full-width". Every picture directly under a
+ * name is the file's name without .xpr, any case, "prefix*" for a family
+ * of them, or "default" for a background (a bkgd* file) with no recipe of
+ * its own. Fills are stripes, clamp and clear (fz_backdrop.c).
+ *
+ * And two switches. "<screen> keep" leaves a screen as the game lays it out
+ * (its rules still apply, nothing else does): the race's own windows,
+ * whose HUD is the game's own 16:9 one and places itself from its window.
+ *
+ * "* span-full-width". Every picture directly under a
  * screen's root that covers all 640 pixels (a control with a texture
  * rectangle starting at texel 0) spans the 16:9 picture, and its texture
  * rectangle grows by 4/3 from its left edge, so it shows the widened texture
  * whole. A picture showing its whole texture (rectangle width 0) just spans.
+ * A gradient bar directly under a spanned root (corner colours, no texture)
+ * that touches an edge of the 4:3 screen reaches that edge of the 16:9 one.
  * Every screen's root that covers the screen spans it too, and every control
  * directly under it moves back by the same 106.67, so the content stays
  * where it was and only what the root draws widens: its BackgroundTexture,
@@ -75,6 +86,7 @@ typedef struct {
     char   name[64];    /* lower case, no extension */
     FzFill left, right;
     int    left_percent;
+    int    fit;         /* squeeze the widened picture back into its old width */
 } FzTexRule;
 
 static FzRule    g_rules[FZ_MAX_RULES];
@@ -82,6 +94,8 @@ static int       g_nrules;
 static FzTexRule g_tex[FZ_MAX_TEX];
 static int       g_ntex;
 static int       g_span_full_width;
+static char      g_keep[32][64];    /* screens left as the game lays them out */
+static int       g_nkeep;
 static int       g_loaded;
 
 extern const unsigned char fz_layout_rules_text[];  /* generated from layout/widescreen.txt */
@@ -121,13 +135,14 @@ static void parse_rules(const char *text)
             continue;
         if (!strncmp(line, "texture ", 8) && g_ntex < FZ_MAX_TEX) {
             FzTexRule *t = &g_tex[g_ntex];
-            char lf[16], rf[16];
+            char lf[16], rf[16], opt[16] = "";
             int pct = 50;
 
-            got = sscanf(line + 8, "%63s %15s %15s %d", t->name, lf, rf, &pct);
+            got = sscanf(line + 8, "%63s %15s %15s %d %15s", t->name, lf, rf, &pct, opt);
             if (got >= 3 && parse_fill(lf, &t->left) && parse_fill(rf, &t->right)) {
                 lower(t->name);
                 t->left_percent = pct < 0 ? 0 : pct > 100 ? 100 : pct;
+                t->fit = !strcmp(opt, "fit");
                 g_ntex++;
             } else {
                 fprintf(stderr, "[FZLAYOUT] not a texture recipe: %s\n", line);
@@ -137,6 +152,13 @@ static void parse_rules(const char *text)
         got = sscanf(line, "%63s %159s %15s %lf %15s", screen, key, op, &value, extra);
         if (got == 2 && !strcmp(screen, "*") && !strcmp(key, "span-full-width")) {
             g_span_full_width = 1;
+            continue;
+        }
+        if (got == 2 && !strcmp(key, "keep") && strcmp(screen, "*")) {
+            if (g_nkeep < (int)(sizeof g_keep / sizeof g_keep[0])) {
+                snprintf(g_keep[g_nkeep], sizeof g_keep[0], "%s", screen);
+                lower(g_keep[g_nkeep++]);
+            }
             continue;
         }
         if (got < 3 || g_nrules == FZ_MAX_RULES) {
@@ -205,7 +227,7 @@ static void load_rules(void)
 
 int fz_layout_texture_recipe(const char *path, uint32_t w, uint32_t h,
                              uint32_t *add_left, FzFill *left,
-                             uint32_t *add_right, FzFill *right)
+                             uint32_t *add_right, FzFill *right, int *fit)
 {
     const char *base;
     char name[64];
@@ -225,8 +247,12 @@ int fz_layout_texture_recipe(const char *path, uint32_t w, uint32_t h,
     memcpy(name, base, n);
     name[n] = 0;
     lower(name);
-    for (i = 0; i < g_ntex; i++) {
-        if (!strcmp(g_tex[i].name, name))
+    for (i = 0; i < g_ntex && !t; i++) {
+        size_t k = strlen(g_tex[i].name);
+
+        /* "name", or "prefix*" for a family. */
+        if (!strcmp(g_tex[i].name, name) ||
+            (k > 1 && g_tex[i].name[k - 1] == '*' && !strncmp(g_tex[i].name, name, k - 1)))
             t = &g_tex[i];
         else if (!strcmp(g_tex[i].name, "default"))
             dflt = &g_tex[i];
@@ -243,6 +269,7 @@ int fz_layout_texture_recipe(const char *path, uint32_t w, uint32_t h,
     *add_right = extra - *add_left;
     *left = t->left;
     *right = t->right;
+    *fit = t->fit;
     return 1;
 }
 
@@ -270,6 +297,7 @@ typedef struct {
     char   child_spell[FZ_CHILDREN][96];
     double child_left[FZ_CHILDREN];
     int    nchildren;
+    int    keep;             /* "<screen> keep": only its own rules */
 } FzFile;
 
 static FzFile g_file[FZ_DEPTH];
@@ -280,6 +308,7 @@ void fz_layout_begin_file(const char *path)
     const char *base, *ui;
     FzFile *f;
     size_t n;
+    int i;
 
     if (g_depth >= FZ_DEPTH) {
         g_depth++;
@@ -300,6 +329,9 @@ void fz_layout_begin_file(const char *path)
     f->screen[n] = 0;
     lower(f->screen);
     load_rules();
+    for (i = 0; i < g_nkeep; i++)
+        if (!strcmp(g_keep[i], f->screen))
+            f->keep = 1;
     if (getenv("FZ_LAYOUT_LOG"))
         fprintf(stderr, "[FZLAYOUT] reading %s\n", f->screen);
 }
@@ -426,6 +458,21 @@ int fz_layout_line(char *line, size_t cap, char *extra, size_t extra_cap)
     snprintf(lkey, sizeof lkey, "%s", key);
     lower(lkey);
 
+    /* Lists the game exempts from its own squish (DoWidescreenSquish false,
+     * 122 of them) draw without it: off to one side of everything else in
+     * the picture. With the squish held on everywhere they take it too. */
+    {
+        size_t kl = strlen(lkey);
+
+        if (!f->keep && kl >= 18 && !strcmp(lkey + kl - 18, "dowidescreensquish")) {
+            if (strncmp(sp + 1, "false", 5) || (size_t)(sp - line) + 6 >= cap)
+                return 0;
+            memcpy(sp + 1, "true", 5);
+            if (getenv("FZ_LAYOUT_LOG"))
+                fprintf(stderr, "[FZLAYOUT] %s: %s false -> true\n", f->screen, key);
+            return 1;
+        }
+    }
     if (sscanf(sp + 1, "%lf", &v) != 1)
         return 0;
     nv = v;
@@ -445,7 +492,7 @@ int fz_layout_line(char *line, size_t cap, char *extra, size_t extra_cap)
     if (r) {
         nv = apply(r, v);
         changed = 1;
-    } else if (g_span_full_width) {
+    } else if (g_span_full_width && !f->keep) {
         if (!ctl[0] && !strcmp(field, "width")) {
             /* The root: its Left went by first. */
             span_root(f, extra, extra_cap);
@@ -471,6 +518,28 @@ int fz_layout_line(char *line, size_t cap, char *extra, size_t extra_cap)
         } else if (f->have_left && !strcmp(ctl, f->ctl) && !strcmp(field, "width")) {
             f->width = v;
             f->have_width = 1;
+        } else if (f->have_width && f->root_spanned && !strcmp(field, "alpha") &&
+                   strlen(ctl) == strlen(f->ctl) + 8 && !strncmp(ctl, f->ctl, strlen(f->ctl)) &&
+                   !strcmp(ctl + strlen(f->ctl), "\\topleft")) {
+            /* A gradient bar (a rectangle with corner colours, no texture):
+             * one that touches an edge of the 4:3 screen reaches the same
+             * edge of the 16:9 one, as it did on the console. Nothing is
+             * stretched; it is flat colour. */
+            int at_left = f->left <= 0.5, at_right = f->left + f->width >= 636.5;
+
+            if (at_left || at_right) {
+                double l = at_left ? -FZ_EDGE : f->left;
+                double r = at_right ? (f->left + f->width > 640.0 ? f->left + f->width : 640.0) + FZ_EDGE
+                                    : f->left + f->width;
+                char k[112];
+
+                snprintf(k, sizeof k, "%sLeft", f->spell);
+                add_extra(extra, extra_cap, k, l + FZ_EDGE);
+                snprintf(k, sizeof k, "%sWidth", f->spell);
+                add_extra(extra, extra_cap, k, r - l);
+                note_child(f, f->spell, l + FZ_EDGE);
+            }
+            f->have_left = f->have_width = 0;
         } else if (f->have_width) {
             char want[128];
 

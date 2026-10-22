@@ -354,6 +354,7 @@ void sub_00271870(void)
 #define FZ_D3D_FORMAT 12u
 #define FZ_D3D_SIZE   16u
 #define FZ_FMT_LIN_A8R8G8B8 0x12u
+#define FZ_FMT_DXT5          0x0Fu
 #define FZ_ALLOC_TAG  0x80u
 
 extern void sub_00064510(void);     /* alloc(size, tag), cdecl */
@@ -378,17 +379,62 @@ static uint32_t fz_guest_call(void (*fn)(void), int n, const uint32_t *args, int
     return g_eax;
 }
 
-static void fz_widen_background(uint32_t path_va, uint32_t tex, uint32_t pixels_out)
+static void fz_widen_background(uint32_t path_va, uint32_t tex, uint32_t pixels_out,
+                                int from_alloc)
 {
     const char *path = (const char *)((uintptr_t)path_va + g_xbox_mem_offset);
     uint32_t fmt = FZ_MEM32(tex + FZ_D3D_FORMAT), size = FZ_MEM32(tex + FZ_D3D_SIZE);
+    uint32_t type = (fmt >> 8) & 0xFFu, old = FZ_MEM32(pixels_out);
     uint32_t w = (size & 0xFFFu) + 1u, h = ((size >> 12) & 0xFFFu) + 1u;
-    uint32_t pitch = ((size >> 24) + 1u) * 64u, old = FZ_MEM32(pixels_out);
+    uint32_t pitch = ((size >> 24) + 1u) * 64u;
     uint32_t add_l, add_r, nw, npitch, block, args[2];
     FzFill fill_l, fill_r;
+    int fit = 0;
 
-    if (((fmt >> 8) & 0xFFu) != FZ_FMT_LIN_A8R8G8B8 || !old ||
-        !fz_layout_texture_recipe(path, w, h, &add_l, &fill_l, &add_r, &fill_r))
+    if (!old)
+        return;
+    if (type == FZ_FMT_DXT5) {
+        /* The track loading pictures: 1024x512 DXT5, their 640x480 of art
+         * top left, from a Direct3D pool rather than the allocator below.
+         * The widened art, 853 wide, still fits the texture: decoded,
+         * widened and encoded back in place -- same memory, same format,
+         * nothing allocated or freed. */
+        uint32_t tw = 1u << ((fmt >> 20) & 0xFu), th = 1u << ((fmt >> 24) & 0xFu);
+        uint8_t *art, *wide;
+        uint8_t *texels = (uint8_t *)((uintptr_t)old + g_xbox_mem_offset);
+
+        w = 640u;
+        h = 480u;
+        if (tw < w || th < h ||
+            !fz_layout_texture_recipe(path, w, h, &add_l, &fill_l, &add_r, &fill_r, &fit) ||
+            w + add_l + add_r > tw)
+            return;
+        nw = w + add_l + add_r;
+        art = (uint8_t *)malloc((size_t)w * h * 4u);
+        wide = (uint8_t *)malloc((size_t)nw * h * 4u);
+        if (art && wide) {
+            fz_backdrop_decode_dxt5(texels, tw, w, h, art);
+            fz_backdrop_widen(art, w, h, w * 4u, wide, nw * 4u, add_l, fill_l, add_r, fill_r);
+            if (fit) {
+                /* Back into the old 640: the game draws that much of it. */
+                fz_backdrop_squeeze(wide, nw, h, art, w);
+                fz_backdrop_encode_dxt5(art, w, h, texels, tw);
+            } else {
+                fz_backdrop_encode_dxt5(wide, nw, h, texels, tw);
+            }
+            if (getenv("FZ_LAYOUT_LOG"))
+                fprintf(stderr, "[FZBKGD] %s: %ux%u of DXT5 -> %ux%u%s in place (+%u left, +%u right)\n",
+                        path, w, h, nw, h, fit ? ", fitted back to 640" : "", add_l, add_r);
+        }
+        free(art);
+        free(wide);
+        return;
+    }
+    /* Linear pictures are rebuilt in a block of their own, so only those the
+     * loader took from sub_00064510 -- the allocator the caller frees with,
+     * and the one this replaces their block from. */
+    if (type != FZ_FMT_LIN_A8R8G8B8 || !from_alloc ||
+        !fz_layout_texture_recipe(path, w, h, &add_l, &fill_l, &add_r, &fill_r, &fit))
         return;
     nw = w + add_l + add_r;
     npitch = (nw * 4u + 63u) & ~63u;
@@ -416,11 +462,14 @@ static void fz_widen_background(uint32_t path_va, uint32_t tex, uint32_t pixels_
                 path, w, h, nw, h, add_l, add_r);
 }
 
-/* cdecl (path, texture, pixels, ...): al is whether it loaded. */
+/* cdecl (path, texture, pixels, bool, bool): al is whether it loaded. */
 extern void sub_001DD9B0_gen(void);
 void sub_001DD9B0(void)
 {
     uint32_t path = FZ_MEM32(g_esp + 4), tex = FZ_MEM32(g_esp + 8), pixels = FZ_MEM32(g_esp + 12);
+    /* The allocation: the fifth argument's low byte asks for a Direct3D
+     * pool, else the fourth's for sub_00064510, else physical memory. */
+    int from_alloc = !(FZ_MEM32(g_esp + 20) & 0xFFu) && (FZ_MEM32(g_esp + 16) & 0xFFu);
     uint32_t eax, ecx, edx;
 
     sub_001DD9B0_gen();
@@ -428,8 +477,40 @@ void sub_001DD9B0(void)
         !*(volatile uint8_t *)((uintptr_t)FZ_WIDE_FLAG + g_xbox_mem_offset))
         return;
     eax = g_eax, ecx = g_ecx, edx = g_edx;
-    fz_widen_background(path, tex, pixels);
+    fz_widen_background(path, tex, pixels, from_alloc);
     g_eax = eax, g_ecx = ecx, g_edx = edx;
+}
+
+/* The frame class's own drawing (sub_001977E0: the black bands, the
+ * coloured bars, and the fade over the area between them) works from the
+ * control's own rectangle. A frame the code makes for itself -- the one that
+ * fades the track loading screen in -- never reads a layout, keeps its
+ * default 640 at x 0, and faded only the middle of the picture. DrawRect
+ * (sub_00277D40: thiscall x, y, w, h, four colours; ret 0x20) widens a
+ * rectangle from those two call sites that covers exactly the 4:3 screen. */
+#define FZ_FRAME_DRAW_BANDS 0x00197AA3u
+#define FZ_FRAME_DRAW_FADE  0x00197B16u
+extern void sub_00277D40_gen(void);
+void sub_00277D40(void)
+{
+    uint32_t ret = FZ_MEM32(g_esp);
+
+    if ((ret == FZ_FRAME_DRAW_BANDS || ret == FZ_FRAME_DRAW_FADE) &&
+        *(volatile uint8_t *)((uintptr_t)FZ_WIDE_FLAG + g_xbox_mem_offset)) {
+        float x, w;
+        void *px = (void *)((uintptr_t)(g_esp + 4) + g_xbox_mem_offset);
+        void *pw = (void *)((uintptr_t)(g_esp + 12) + g_xbox_mem_offset);
+
+        memcpy(&x, px, 4);
+        memcpy(&w, pw, 4);
+        if (x > -0.5f && x < 0.5f && w > 639.5f && w < 640.5f) {
+            x -= 106.666667f;
+            w += 213.333333f;
+            memcpy(px, &x, 4);
+            memcpy(pw, &w, 4);
+        }
+    }
+    sub_00277D40_gen();
 }
 
 recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
@@ -442,6 +523,7 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
     if (xbox_va == 0x00272980u) return sub_00272980;
     if (xbox_va == 0x00271870u) return sub_00271870;
     if (xbox_va == 0x001DD9B0u) return sub_001DD9B0;
+    if (xbox_va == 0x00277D40u) return sub_00277D40;
     /*
      * TODO: Add your overrides here. Examples:
      *
