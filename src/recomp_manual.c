@@ -256,6 +256,18 @@ void sub_001DA2B0(void)
     fz_hold_ui_squish();
 }
 
+/* A window that sets the scale itself: activating one (when the flag at
+ * 0x592984 is set) saves the scale in the window (+0x280) and writes 1.0
+ * straight over it; deactivating (sub_001A0690) puts the saved value back.
+ * The name-entry keyboard after "New profile" is one, and drew unsquished,
+ * offset against everything around it. Held at 4/3 here as well. */
+extern void sub_001A06F0_gen(void);
+void sub_001A06F0(void)
+{
+    sub_001A06F0_gen();
+    fz_hold_ui_squish();
+}
+
 /* SetUIXScale(float), cdecl: 4/3 in widescreen whatever is asked. */
 void sub_00276820(void)
 {
@@ -267,12 +279,169 @@ void sub_00276820(void)
     g_esp += 4;
 }
 
+/* ── Widescreen: the menus' layouts (fz_layout.c) ───────────────────
+ *
+ * sub_00272980 reads a settings file into a property tree, a line at a time,
+ * and sub_00271870 hands one line ("Menu\Left 55") to the tree. The stream
+ * it reads from carries the file's path inline at +0x2C (D:\MEDIA\UI\NTSC\
+ * <screen>.ini for a layout). Lines of a layout go through the 16:9 rules
+ * first, and a rule may add a line of its own, dispatched after the
+ * original: how a value read before the line that decides it is corrected. */
+#include "fz_layout.h"
+
+#define FZ_STREAM_PATH 0x2Cu
+
+/* thiscall (root, stream), ret 4 */
+extern void sub_00272980_gen(void);
+void sub_00272980(void)
+{
+    uint32_t stream = FZ_MEM32(g_esp + 4);
+    const char *path = (const char *)((uintptr_t)(stream + FZ_STREAM_PATH) + g_xbox_mem_offset);
+
+    fz_layout_begin_file(stream && path[0] == 'D' && path[1] == ':' ? path : NULL);
+    sub_00272980_gen();
+    fz_layout_end_file();
+}
+
+/* thiscall (root, line), ret 4; the line is a 0x800-byte buffer in the
+ * reader's frame. */
+#define FZ_LINE_CAP 0x800u
+extern void sub_00271870_gen(void);
+void sub_00271870(void)
+{
+    uint32_t root = g_ecx, line = FZ_MEM32(g_esp + 4), ret = FZ_MEM32(g_esp);
+    char *text = (char *)((uintptr_t)line + g_xbox_mem_offset);
+    char extra[512], *p, *nl;
+
+    if (!line || !fz_layout_active() ||
+        !*(volatile uint8_t *)((uintptr_t)FZ_WIDE_FLAG + g_xbox_mem_offset) ||
+        !fz_layout_line(text, FZ_LINE_CAP, extra, sizeof extra) || !extra[0]) {
+        sub_00271870_gen();
+        return;
+    }
+    sub_00271870_gen();
+    /* The extra lines, one per newline, through the same buffer, as the
+     * reader would hand them over. */
+    for (p = extra; *p; p = nl ? nl + 1 : p + strlen(p)) {
+        size_t n;
+
+        nl = strchr(p, '\n');
+        n = nl ? (size_t)(nl - p) : strlen(p);
+        memcpy(text, p, n);
+        text[n] = 0;
+        g_esp -= 8;
+        FZ_MEM32(g_esp) = ret;
+        FZ_MEM32(g_esp + 4) = line;
+        g_ecx = root;
+        sub_00271870_gen();
+    }
+}
+
+/* ── Widescreen: the menus' backgrounds (fz_backdrop.c) ─────────────
+ *
+ * sub_001DD9B0(path, D3DTexture *texture, void **pixels, ...) loads a menu
+ * background: it reads the .xpr's texture header into *texture, allocates
+ * (sub_00064510, size and 0x80) and reads the pixels, hands their address
+ * back through pixels -- the caller frees them later (sub_00064530) -- and
+ * registers the texture (sub_003BC0C0, stdcall). Returns true in al.
+ *
+ * In widescreen, a background with a recipe (fz_layout_texture_recipe) is
+ * rebuilt 4/3 as wide in a new block from the same allocator: the texture
+ * header takes its new size and is registered again over it, the caller
+ * gets the new block (so its free releases the right one), and the old one
+ * goes back at once. */
+#define FZ_D3D_DATA   4u      /* D3DTexture: Common, Data, Lock, Format, Size */
+#define FZ_D3D_FORMAT 12u
+#define FZ_D3D_SIZE   16u
+#define FZ_FMT_LIN_A8R8G8B8 0x12u
+#define FZ_ALLOC_TAG  0x80u
+
+extern void sub_00064510(void);     /* alloc(size, tag), cdecl */
+extern void sub_00064530(void);     /* free(block, tag), cdecl */
+extern void sub_003BC0C0(void);     /* register(resource, base), stdcall */
+
+/* Calls a lifted function from here, as the game would: arguments, then a
+ * return address that is never jumped to. */
+static uint32_t fz_guest_call(void (*fn)(void), int n, const uint32_t *args, int callee_pops)
+{
+    int i;
+
+    for (i = n - 1; i >= 0; i--) {
+        g_esp -= 4;
+        FZ_MEM32(g_esp) = args[i];
+    }
+    g_esp -= 4;
+    FZ_MEM32(g_esp) = 0;
+    fn();
+    if (!callee_pops)
+        g_esp += 4u * (uint32_t)n;
+    return g_eax;
+}
+
+static void fz_widen_background(uint32_t path_va, uint32_t tex, uint32_t pixels_out)
+{
+    const char *path = (const char *)((uintptr_t)path_va + g_xbox_mem_offset);
+    uint32_t fmt = FZ_MEM32(tex + FZ_D3D_FORMAT), size = FZ_MEM32(tex + FZ_D3D_SIZE);
+    uint32_t w = (size & 0xFFFu) + 1u, h = ((size >> 12) & 0xFFFu) + 1u;
+    uint32_t pitch = ((size >> 24) + 1u) * 64u, old = FZ_MEM32(pixels_out);
+    uint32_t add_l, add_r, nw, npitch, block, args[2];
+    FzFill fill_l, fill_r;
+
+    if (((fmt >> 8) & 0xFFu) != FZ_FMT_LIN_A8R8G8B8 || !old ||
+        !fz_layout_texture_recipe(path, w, h, &add_l, &fill_l, &add_r, &fill_r))
+        return;
+    nw = w + add_l + add_r;
+    npitch = (nw * 4u + 63u) & ~63u;
+    args[0] = npitch * h;
+    args[1] = FZ_ALLOC_TAG;
+    block = fz_guest_call(sub_00064510, 2, args, 0);
+    if (!block) {
+        fprintf(stderr, "[FZBKGD] no memory to widen %s; left at 4:3\n", path);
+        return;
+    }
+    fz_backdrop_widen((const uint8_t *)((uintptr_t)old + g_xbox_mem_offset), w, h, pitch,
+                      (uint8_t *)((uintptr_t)block + g_xbox_mem_offset), npitch,
+                      add_l, fill_l, add_r, fill_r);
+    FZ_MEM32(tex + FZ_D3D_DATA) = 0;
+    FZ_MEM32(tex + FZ_D3D_SIZE) = ((npitch / 64u - 1u) << 24) | ((h - 1u) << 12) | (nw - 1u);
+    args[0] = tex;
+    args[1] = block;
+    fz_guest_call(sub_003BC0C0, 2, args, 1);
+    FZ_MEM32(pixels_out) = block;
+    args[0] = old;
+    args[1] = FZ_ALLOC_TAG;
+    fz_guest_call(sub_00064530, 2, args, 0);
+    if (getenv("FZ_LAYOUT_LOG"))
+        fprintf(stderr, "[FZBKGD] %s: %ux%u -> %ux%u (+%u left, +%u right)\n",
+                path, w, h, nw, h, add_l, add_r);
+}
+
+/* cdecl (path, texture, pixels, ...): al is whether it loaded. */
+extern void sub_001DD9B0_gen(void);
+void sub_001DD9B0(void)
+{
+    uint32_t path = FZ_MEM32(g_esp + 4), tex = FZ_MEM32(g_esp + 8), pixels = FZ_MEM32(g_esp + 12);
+    uint32_t eax, ecx, edx;
+
+    sub_001DD9B0_gen();
+    if (!(g_eax & 0xFFu) || !path || !tex || !pixels ||
+        !*(volatile uint8_t *)((uintptr_t)FZ_WIDE_FLAG + g_xbox_mem_offset))
+        return;
+    eax = g_eax, ecx = g_ecx, edx = g_edx;
+    fz_widen_background(path, tex, pixels);
+    g_eax = eax, g_ecx = ecx, g_edx = edx;
+}
+
 recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
 {
     if (xbox_va == 0x00059250u) return sub_00059250;
     if (xbox_va == 0x00059210u) return sub_00059210;
     if (xbox_va == 0x001DA2B0u) return sub_001DA2B0;
     if (xbox_va == 0x00276820u) return sub_00276820;
+    if (xbox_va == 0x001A06F0u) return sub_001A06F0;
+    if (xbox_va == 0x00272980u) return sub_00272980;
+    if (xbox_va == 0x00271870u) return sub_00271870;
+    if (xbox_va == 0x001DD9B0u) return sub_001DD9B0;
     /*
      * TODO: Add your overrides here. Examples:
      *

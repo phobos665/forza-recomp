@@ -1,0 +1,73 @@
+# Forza Motorsport's menus at 16:9: how to move what the disc's layouts hold.
+# The format is in src/fz_layout.c. Coordinates: 0..640 is the middle of the
+# picture, -106.67 and 746.67 its edges. Child positions are relative to
+# their parent.
+
+# Backgrounds and panels that cover the whole 4:3 screen cover the whole
+# 16:9 one, showing their textures widened by 4/3 (fz_backdrop.c).
+* span-full-width
+
+# How each background grows: <left fill> <right fill> <percent of the new
+# columns on the left>. Striped panels with a photo on the right put all of
+# them on the left, so the photo stays flush with the screen's right edge.
+# Full-frame photos cannot be carried on: clear, which shows as black.
+texture default                 clear   clear   50
+texture bkgd_main               stripes clear   100
+texture bkgd_profile_sele       stripes clear   100
+texture bkgd_ca_main            stripes clear   100
+texture bkgd_ca_dealercountry   stripes clear   100
+texture bkgd_ca_drivatarmain    stripes clear   100
+texture bkgd_ca_drvtasele       stripes clear   100
+texture bkgd_ca_garagemain      stripes clear   100
+texture bkgd_ca_regionsele      stripes clear   100
+texture bkgd_ca_tradeprofile    stripes clear   100
+texture bkgd_ca_tuningmain      stripes clear   100
+texture bkgd_mp_main            stripes clear   100
+texture bkgd_op_main            stripes clear   100
+texture bkgd_sb_main            stripes clear   100
+texture bkgd_xl_main            stripes clear   100
+# Stripes all over, something in the middle: both sides.
+texture bkgd_carbonfiber        stripes stripes 50
+texture bkgd_controller_port    stripes stripes 50
+texture bkgd_controller_scrn    stripes stripes 50
+texture bkgd_controller_wheel   stripes stripes 50
+texture bkgd_op_soundtrack      stripes stripes 50
+# Stripes with bars running off the right edge: the bars carry on.
+texture bkgd_carclub            stripes clamp   50
+texture bkgd_carclub-memebers   stripes clamp   50
+texture bkgd_carclub_invites    stripes clamp   50
+texture bkgd_mp_lobby           stripes clamp   50
+texture bkgd_op_replay          stripes clamp   50
+# The white swoosh overlays: stripes on the left, the window stays open.
+texture bkgd_fiberswoosh        stripes clear   50
+texture bkgd_swoosh-fiber       clamp   clamp   50
+texture bkgd-arc                clamp   clamp   50
+texture bkgd-arc-50             clamp   clamp   50
+# Smooth gradients and glows: the edge carries on.
+texture bkgd_grayshaded         clamp   clamp   50
+texture bkgd_carselect          clamp   clamp   50
+texture bkgd_win_car            clamp   clamp   50
+
+# The frame every front-end screen sits in (UIFrontEndBackground.ini). Its
+# root draws the black bands and coloured bars across its own rectangle. It
+# sits in the screen's root, which has spanned already, so its Left stays
+# and it widens. Its children are relative to it, so from its left edge,
+# now the picture's: the heading and button prompts keep their values,
+# right-hand things go 213.33 further, and the middle 106.67.
+uifrontendbackground Left                    + 0
+uifrontendbackground Width                   span
+uifrontendbackground SubTitle\Left           + 0
+uifrontendbackground HomeHotKey\Left         + 213.3333
+uifrontendbackground LIVEHotKey\Left         + 213.3333
+uifrontendbackground TopHotKeyAnchor\X       + 213.3333
+# The work area is the band between the bars, which the frame lays a faint
+# panel over: it spans with the rest (left at 4:3, it showed as seams).
+uifrontendbackground WorkArea\Left           + 0
+uifrontendbackground WorkArea\Width          span
+# The career bar spans with the root; its money moves with the right edge,
+# the car in its middle stays in the middle.
+uifrontendbackground CareerInfo\Width        span
+uifrontendbackground CareerInfo\Money\Left               + 213.3333
+uifrontendbackground CareerInfo\CarName\Left             + 106.6667
+uifrontendbackground CareerInfo\DriveType\Left           + 106.6667
+uifrontendbackground CareerInfo\PerformanceSubclass\Left + 106.6667

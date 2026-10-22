@@ -72,12 +72,23 @@ add_subdirectory(${XBOXRECOMP_DIR} ${CMAKE_BINARY_DIR}/xboxrecomp)
 file(GLOB RECOMP_GEN_SOURCES CONFIGURE_DEPENDS "src/recomp/gen/*.c")
 
 # Core game sources
+# The 16:9 menu layout rules, compiled in as text (src/fz_layout.c reads
+# them; FZ_LAYOUT=<file> reads another at run time). A change to the rules
+# re-runs CMake, which writes them out again.
+set(FZ_LAYOUT_RULES ${CMAKE_CURRENT_SOURCE_DIR}/layout/widescreen.txt)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${FZ_LAYOUT_RULES})
+file(READ ${FZ_LAYOUT_RULES} _fz_rules_hex HEX)
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _fz_rules_bytes "${_fz_rules_hex}")
+file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/fz_layout_rules.c
+     "/* Generated from layout/widescreen.txt. */\n"
+     "const unsigned char fz_layout_rules_text[] = {${_fz_rules_bytes} 0x00};\n")
+
 set(GAME_SOURCES
     src/main.c
     src/recomp_manual.c
-    # Add game-specific sources here, e.g.:
-    # src/asset_loader.c
-    # src/custom_renderer.c
+    src/fz_layout.c
+    src/fz_backdrop.c
+    ${CMAKE_CURRENT_BINARY_DIR}/fz_layout_rules.c
 )
 
 # The recomp pipeline also generates a dispatch header and function declarations.
