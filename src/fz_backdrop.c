@@ -22,6 +22,10 @@
  *            horizontal bars.
  *   clear    black, as opaque as the art's edge column: black sides for a
  *            picture, an open window left open in an overlay.
+ *   zoom     (both sides) no new columns at all: the picture itself is
+ *            enlarged by the same 4/3 about its middle, so a picture with
+ *            black bands above and below its art (the title screen) fills
+ *            the wide screen and the bands go off its top and bottom.
  *
  * A background with no recipe of its own gets "clear" on both sides, which
  * is the black sides the menus had before.
@@ -306,6 +310,41 @@ void fz_backdrop_squeeze(const uint8_t *src, uint32_t w, uint32_t h, uint8_t *ds
         }
 }
 
+/* nw x h from w x h, enlarged by nw / w about the middle, bilinear. */
+static void zoom(const uint8_t *src, uint32_t w, uint32_t h, uint32_t src_pitch,
+                 uint8_t *dst, uint32_t dst_pitch, uint32_t nw)
+{
+    double k = (double)w / (double)nw;
+    uint32_t y, x, c;
+
+    for (y = 0; y < h; y++) {
+        uint8_t *row = dst + (size_t)y * dst_pitch;
+        double sy = (double)h / 2.0 + ((double)y + 0.5 - (double)h / 2.0) * k - 0.5;
+        int y0 = (int)sy;
+        double fy = sy - y0;
+        int y1 = y0 + 1;
+
+        if (sy < 0) { y0 = y1 = 0; fy = 0; }
+        if (y1 >= (int)h) y1 = (int)h - 1;
+        if (y0 >= (int)h) y0 = (int)h - 1;
+        for (x = 0; x < nw; x++) {
+            double sx = ((double)x + 0.5) * k - 0.5;
+            int x0 = (int)sx, x1;
+            double fx = sx - x0;
+
+            if (sx < 0) { x0 = 0; fx = 0; }
+            x1 = x0 + 1 < (int)w ? x0 + 1 : (int)w - 1;
+            for (c = 0; c < 4; c++) {
+                const uint8_t *r0 = src + (size_t)y0 * src_pitch, *r1 = src + (size_t)y1 * src_pitch;
+                double a = r0[(size_t)x0 * 4u + c] * (1 - fx) + r0[(size_t)x1 * 4u + c] * fx;
+                double b = r1[(size_t)x0 * 4u + c] * (1 - fx) + r1[(size_t)x1 * 4u + c] * fx;
+                row[(size_t)x * 4u + c] = (uint8_t)(a * (1 - fy) + b * fy + 0.5);
+            }
+        }
+        memset(row + (size_t)nw * 4u, 0, dst_pitch - (size_t)nw * 4u);
+    }
+}
+
 void fz_backdrop_widen(const uint8_t *src, uint32_t w, uint32_t h, uint32_t src_pitch,
                        uint8_t *dst, uint32_t dst_pitch,
                        uint32_t add_left, FzFill left_mode,
@@ -313,6 +352,10 @@ void fz_backdrop_widen(const uint8_t *src, uint32_t w, uint32_t h, uint32_t src_
 {
     uint32_t y, x, nw = w + add_left + add_right;
 
+    if (left_mode == FZ_FILL_ZOOM || right_mode == FZ_FILL_ZOOM) {
+        zoom(src, w, h, src_pitch, dst, dst_pitch, nw);
+        return;
+    }
     g_band_src = NULL;
 
     for (y = 0; y < h; y++) {

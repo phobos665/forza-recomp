@@ -5,7 +5,7 @@
 
 #include <stdint.h>
 
-typedef enum { FZ_FILL_CLEAR = 0, FZ_FILL_CLAMP, FZ_FILL_STRIPES } FzFill;
+typedef enum { FZ_FILL_CLEAR = 0, FZ_FILL_CLAMP, FZ_FILL_STRIPES, FZ_FILL_ZOOM } FzFill;
 
 /* The top-left crop_w x crop_h texels of a DXT5 texture tex_w wide, into
  * linear 32-bit texels at dst (crop_w * 4 bytes a row). */

@@ -48,6 +48,9 @@ texture bkgd-arc-50             clamp   clamp   50
 # texels of them however wide the picture is, so the widened art is fitted
 # back into those 640 and the picture spans (loadgame, below).
 texture load_*                  stripes clear   100 fit
+# The title screen's picture has black bands above and below its art:
+# enlarged by 4/3, the art fills the wide screen and the bands go.
+texture bkgd_title              zoom    zoom    50
 # Smooth gradients and glows: the edge carries on.
 texture bkgd_grayshaded         clamp   clamp   50
 texture bkgd_carselect          clamp   clamp   50
@@ -89,3 +92,21 @@ uifrontendbackground CareerInfo\PerformanceSubclass\Left + 106.6667
 loadgame LoadingBackground\Left                 + 0
 loadgame LoadingBackground\Width                span
 loadgame LoadingBackground\TextureRect\Width    = 640
+
+# "My Profile" (the stats popup) brings its own frame, built by code on its
+# root (Left -10) rather than on the screen's: its heading and button
+# prompt sat 97 to the right of where every other screen has them, and its
+# panel's gradient stopped short of the left edge in a black strip. The
+# frame ignores its own Left values, so the root moves left to put the
+# prompt where the other screens have theirs, and what is in the frame and
+# under the root moves back by the same: the heading, the name box and the
+# tabs (laid out by statstabs.ini, relative to the root). The gradient
+# reaches both edges.
+profilestatspopup Left                           - 87.3333
+profilestatspopup NameBox\Left                   + 87.3333
+statstabs Left                                   + 87.3333
+profilestatspopup Background\Title\Left          - 19.3333
+profilestatspopup Background\WorkArea\Left       - 9.3333
+profilestatspopup Background\WorkArea\Width      span
+profilestatspopup Background\GradientLeft        = -125
+profilestatspopup Background\GradientWidth       = 939

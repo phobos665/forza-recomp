@@ -491,19 +491,56 @@ void sub_001DD9B0(void)
 #define FZ_FRAME_DRAW_BANDS 0x00197AA3u
 #define FZ_FRAME_DRAW_FADE  0x00197B16u
 extern void sub_00277D40_gen(void);
+extern void hle_d3d8_interp_hold(void);
 void sub_00277D40(void)
 {
     uint32_t ret = FZ_MEM32(g_esp);
 
-    if ((ret == FZ_FRAME_DRAW_BANDS || ret == FZ_FRAME_DRAW_FADE) &&
-        *(volatile uint8_t *)((uintptr_t)FZ_WIDE_FLAG + g_xbox_mem_offset)) {
-        float x, w;
+    /* The front end's frame draws its bands at every frame of every menu
+     * screen. Those frames are shown as the game draws them, with no
+     * in-between: a menu fading in or out sets the fade where the redraw
+     * does not see it, and the in-between showed headings and prompts at
+     * full strength and stray panels between two faded pictures -- a
+     * flicker at every change of screen. The race keeps its in-betweens.
+     * FZ_MENU_INTERP=1 draws them in the menus as well. */
+    if (ret == FZ_FRAME_DRAW_BANDS) {
+        static int menu_interp = -1;
+        if (menu_interp < 0) {
+            const char *v = getenv("FZ_MENU_INTERP");
+            menu_interp = v && v[0] == '1';
+        }
+        if (!menu_interp)
+            hle_d3d8_interp_hold();
+    }
+
+    if (*(volatile uint8_t *)((uintptr_t)FZ_WIDE_FLAG + g_xbox_mem_offset)) {
+        float x, y, w, h;
         void *px = (void *)((uintptr_t)(g_esp + 4) + g_xbox_mem_offset);
         void *pw = (void *)((uintptr_t)(g_esp + 12) + g_xbox_mem_offset);
+        int full;
 
         memcpy(&x, px, 4);
+        memcpy(&y, (void *)((uintptr_t)(g_esp + 8) + g_xbox_mem_offset), 4);
         memcpy(&w, pw, 4);
-        if (x > -0.5f && x < 0.5f && w > 639.5f && w < 640.5f) {
+        memcpy(&h, (void *)((uintptr_t)(g_esp + 16) + g_xbox_mem_offset), 4);
+        /* A rectangle over the whole 4:3 screen is a fade or a flash over
+         * everything (the race start fades in from black through one):
+         * whoever draws it, it covers the 16:9 picture. */
+        full = y > -0.5f && y < 0.5f && h > 479.5f && h < 480.5f;
+        if (full) {
+            static uint32_t seen[16];
+            static int nseen;
+            int i;
+            for (i = 0; i < nseen && seen[i] != ret; i++)
+                ;
+            if (i == nseen && nseen < 16) {
+                seen[nseen++] = ret;
+                fprintf(stderr, "[FZ] full-screen DrawRect from 0x%08X (x %.1f w %.1f)\n",
+                        ret, x, w);
+            }
+        }
+        if ((full || ret == FZ_FRAME_DRAW_BANDS || ret == FZ_FRAME_DRAW_FADE) &&
+            x > -0.5f && x < 0.5f && w > 639.5f && w < 640.5f) {
             x -= 106.666667f;
             w += 213.333333f;
             memcpy(px, &x, 4);
@@ -513,8 +550,137 @@ void sub_00277D40(void)
     sub_00277D40_gen();
 }
 
+/* The car selection's showroom backdrop (Bkgd_CarSelect, widened to 960
+ * texels by fz_backdrop.c) is drawn by the car display (sub_0033A180, twice:
+ * the normal and the fading pass) with the sprite call sub_0005D320
+ * (thiscall x, y, w, h, u, v, tex w, tex h, colour), at a fixed 0, 0, 640,
+ * 480 with texels 0..720. Through the UI squish that is the middle 4:3 of the
+ * picture: the showroom light stopped in a hard edge on the right, and its
+ * centre sat left of the car. In widescreen it covers the whole picture and
+ * shows the whole widened texture. */
+#define FZ_CARSEL_BACKDROP_A 0x0033A611u
+#define FZ_CARSEL_BACKDROP_B 0x0033AB23u
+#define FZ_CARSEL_BACKDROP_C 0x0033AE58u   /* a third pass, drawn while the screen changes */
+extern void sub_0005D320_gen(void);
+void sub_0005D320(void)
+{
+    uint32_t ret = FZ_MEM32(g_esp);
+
+    if ((ret == FZ_CARSEL_BACKDROP_A || ret == FZ_CARSEL_BACKDROP_B ||
+         ret == FZ_CARSEL_BACKDROP_C) &&
+        *(volatile uint8_t *)((uintptr_t)FZ_WIDE_FLAG + g_xbox_mem_offset)) {
+        float x, w, tw;
+        void *px = (void *)((uintptr_t)(g_esp + 4) + g_xbox_mem_offset);
+        void *pw = (void *)((uintptr_t)(g_esp + 12) + g_xbox_mem_offset);
+        void *ptw = (void *)((uintptr_t)(g_esp + 28) + g_xbox_mem_offset);
+
+        memcpy(&x, px, 4);
+        memcpy(&w, pw, 4);
+        memcpy(&tw, ptw, 4);
+        if (x > -0.5f && x < 0.5f && w > 639.5f && w < 640.5f && tw > 719.5f && tw < 720.5f) {
+            x -= 106.666667f;
+            w += 213.333333f;
+            tw = 960.0f;
+            memcpy(px, &x, 4);
+            memcpy(pw, &w, 4);
+            memcpy(ptw, &tw, 4);
+        }
+    }
+    /* FZ_SPRITE_LOG=1: each caller of the sprite call once, with its
+     * rectangle -- for finding who draws what on a menu. */
+    {
+        static int log = -1;
+        if (log < 0) {
+            const char *v = getenv("FZ_SPRITE_LOG");
+            log = v && v[0] == '1';
+        }
+        if (log) {
+            static uint32_t seen[256];
+            static int nseen;
+            int i;
+            for (i = 0; i < nseen && seen[i] != ret; i++)
+                ;
+            if (i == nseen && nseen < 256) {
+                float a[8];
+                seen[nseen++] = ret;
+                memcpy(a, (void *)((uintptr_t)(g_esp + 4) + g_xbox_mem_offset), sizeof a);
+                fprintf(stderr, "[FZSPRITE] from 0x%08X: x %.1f y %.1f w %.1f h %.1f "
+                        "u %.1f v %.1f tw %.1f th %.1f\n", ret, a[0], a[1], a[2], a[3],
+                        a[4], a[5], a[6], a[7]);
+            }
+        }
+    }
+    sub_0005D320_gen();
+}
+
+/* Same SHA-1 block transform and guest ABI, without volatile guest-memory
+ * accesses for every arithmetic step. The lifted reference remains available. */
+#include "fz_sha1.h"
+extern void sub_00287E40_gen(void);
+void sub_00287E40(void)
+{
+    static int enabled=-1;
+    if(enabled<0){const char *v=getenv("RECOMP_FAST_SHA1");enabled=!(v&&v[0]=='0');
+        fprintf(stderr,"[FORZA] native SHA-1 block transform %s\n",enabled?"enabled":"disabled");}
+    if(!enabled){sub_00287E40_gen();return;}
+    uint32_t context=FZ_MEM32(g_esp+4),a,c,d;
+    fz_sha1_block((uint8_t *)((uintptr_t)context+g_xbox_mem_offset),&a,&c,&d);
+    g_eax=a;g_ecx=c;g_edx=d;g_esp+=4;
+}
+
+/* Diagnostic only: preserve the original material dispatcher and its ABI. */
+extern void sub_001E53D0_gen(void);
+extern unsigned long hle_d3d8_shadow_swaps(void);
+extern void hle_d3d8_material_trace_context(uint32_t,uint32_t,uint32_t,int);
+extern int hle_d3d8_capture_active(void);
+void sub_001E53D0(void)
+{
+    static int enabled=-1, first=1;
+    static unsigned long selected_swap, next_swap;
+    if(enabled<0){const char *v=getenv("RECOMP_TRACE_MATERIALS");enabled=v&&v[0]=='1';}
+    if(enabled){
+        unsigned long swap=hle_d3d8_shadow_swaps();
+        if(first){fprintf(stderr,"[MATERIAL] trace active, first object %08X at swap %lu\n",g_ecx,swap);first=0;}
+        if(swap>=next_swap){selected_swap=swap;next_swap=((swap/300u)+1u)*300u;}
+        if(swap==selected_swap || hle_d3d8_capture_active()){
+            uint32_t obj=g_ecx, pass=FZ_MEM32(g_esp+4);
+            if(obj){
+                uint32_t type=FZ_MEM32(obj+0x14)&255u;
+                hle_d3d8_material_trace_context(obj,pass,type,1);
+                uint32_t renderer=FZ_MEM32(0x5E0128u+4u*type);
+                uint32_t vtable=renderer?FZ_MEM32(renderer):0;
+                uint32_t entry=vtable?FZ_MEM32(vtable+0x18):0;
+                fprintf(stderr,"[MATERIAL] swap %lu object %08X pass %u type %u flags %08X renderer %08X geometry %08X count %u index %08X\n",
+                    swap,obj,pass,type,FZ_MEM32(obj),entry,FZ_MEM32(obj+4),FZ_MEM32(obj+8),FZ_MEM32(obj+12));
+            }
+        }
+    }
+    sub_001E53D0_gen();
+    if(enabled) hle_d3d8_material_trace_context(0,0,0,0);
+}
+
+/* fz_missing.c: guest functions the lift has no body for. */
+void fz_sub_0019D240(void);
+void fz_crt_tanh_0x002FE3D9(void);
+void fz_sub_0027F450(void);
+void fz_sub_0001AEC0(void);
+
 recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
 {
+    /* "Updating Scoreboards" after a race: reached only through this+0x1C of
+     * the race-end state machine (0x00096C30), so the function analysis never
+     * found it and every call was refused. fz_missing.c. */
+    if (xbox_va == 0x0019D240u) return fz_sub_0019D240;
+    /* The C runtime's tanh core, a tail-jump target of the x87 dispatcher
+     * 0x002FC8B8 the lift has no body for; refused, tanh(x) returned x.
+     * fz_missing.c. */
+    if (xbox_va == 0x002FE3D9u) return fz_crt_tanh_0x002FE3D9;
+    /* The background loader's thread, started by address only; without it
+     * the car selection's turntable car never loaded. fz_missing.c. */
+    if (xbox_va == 0x0027F450u) return fz_sub_0027F450;
+    if (xbox_va == 0x0001AEC0u) return fz_sub_0001AEC0;
+    if (xbox_va == 0x001E53D0u) return sub_001E53D0;
+    if (xbox_va == 0x00287E40u) return sub_00287E40;
     if (xbox_va == 0x00059250u) return sub_00059250;
     if (xbox_va == 0x00059210u) return sub_00059210;
     if (xbox_va == 0x001DA2B0u) return sub_001DA2B0;
@@ -524,6 +690,7 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
     if (xbox_va == 0x00271870u) return sub_00271870;
     if (xbox_va == 0x001DD9B0u) return sub_001DD9B0;
     if (xbox_va == 0x00277D40u) return sub_00277D40;
+    if (xbox_va == 0x0005D320u) return sub_0005D320;
     /*
      * TODO: Add your overrides here. Examples:
      *

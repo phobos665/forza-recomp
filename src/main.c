@@ -527,6 +527,69 @@ static int title_main(int argc, char **argv)
         xbox_path_init(g_game_dir, NULL);
     }
 
+    /* Forza Motorsport keeps W in its depth buffer, and so does this now
+     * (RECOMP_D3D8_WBUFFER=0 goes back to Z). It was Z for a while: the host
+     * interpolated the emulated W linearly in screen space, a horizon quad
+     * with one corner behind the camera got a near-zero depth across half
+     * the screen and painted black slabs over the road. The pixel stage now
+     * writes the exact W (d3d8_vsh.c, d3d8_vsh_wdepth_on), and Z lost its
+     * own way: hyperbolic, it had too little precision left at a billboard's
+     * distance to keep the advert in front of the board it is painted on,
+     * and the white board came through in wedges as the car moved. */
+
+    /* Forza steps its game once a presented frame and was made for 30 of
+     * them a second, but it runs its sound on the 60 Hz vertical blank.
+     * A 30 Hz blank (set here for a while) gave the right speed and lost
+     * sounds in races; 60 Hz with the adaptive gate kept the sound and
+     * drove at twice the speed. So: the blank stays at 60 Hz and the gate
+     * releases a Swap every second blank, as the console does for a game
+     * that takes two of them a frame. A cap the player chose (RECOMP_FPS_CAP,
+     * frame_cap in the launcher settings, F10) other than adaptive wins. */
+    {
+        extern const char *recomp_config_lookup(const char *env_name, const char *key);
+        const char *cap = recomp_config_lookup("RECOMP_FPS_CAP", "frame_cap");
+        if (!cap || !*cap || strcmp(cap, "adaptive") == 0) {
+#ifdef _WIN32
+            _putenv("RECOMP_FPS_CAP=30");
+#else
+            setenv("RECOMP_FPS_CAP", "30", 1);
+#endif
+        }
+    }
+
+    /* And an empty texture stage reads transparent black, not white: its
+     * street lights leave the stages of absent lights empty (d3d8_device.c,
+     * empty_stage_view). RECOMP_D3D8_EMPTY_STAGE=white for the old value. */
+    if (!getenv("RECOMP_D3D8_EMPTY_STAGE")) {
+#ifdef _WIN32
+        _putenv("RECOMP_D3D8_EMPTY_STAGE=black");
+#else
+        setenv("RECOMP_D3D8_EMPTY_STAGE", "black", 0);
+#endif
+    }
+
+    /* And the mid-frame clear of depth and stencil keeps the road's depth
+     * (hle_d3d8.c, D3DDevice_Clear): otherwise a far ground plane lays dark
+     * slabs across the road. RECOMP_HLE_D3D8_KEEP_DEPTH_ON_ZCLEAR=0 undoes. */
+    if (!getenv("RECOMP_HLE_D3D8_KEEP_DEPTH_ON_ZCLEAR")) {
+#ifdef _WIN32
+        _putenv("RECOMP_HLE_D3D8_KEEP_DEPTH_ON_ZCLEAR=1");
+#else
+        setenv("RECOMP_HLE_D3D8_KEEP_DEPTH_ON_ZCLEAR", "1", 0);
+#endif
+    }
+    /* Headlights: Forza samples its 128x128x8 headlight volume under
+     * PS_TEXTUREMODES_PROJECT2D. The slice comes from the r coordinate;
+     * read at r = 0 the cone was black and the road ahead stayed unlit.
+     * RECOMP_D3D8_PROJ2D_VOLUME_R=0 undoes. */
+    if (!getenv("RECOMP_D3D8_PROJ2D_VOLUME_R")) {
+#ifdef _WIN32
+        _putenv("RECOMP_D3D8_PROJ2D_VOLUME_R=1");
+#else
+        setenv("RECOMP_D3D8_PROJ2D_VOLUME_R", "1", 0);
+#endif
+    }
+
     /* Step 5: Initialize kernel bridge (thunk table in Xbox memory) */
     printf("Initializing kernel bridge...\n");
     xbox_kernel_bridge_init();
