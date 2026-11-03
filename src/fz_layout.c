@@ -111,6 +111,7 @@ static int parse_fill(const char *s, FzFill *out)
     if (!strcmp(s, "stripes")) { *out = FZ_FILL_STRIPES; return 1; }
     if (!strcmp(s, "clamp"))   { *out = FZ_FILL_CLAMP;   return 1; }
     if (!strcmp(s, "clear"))   { *out = FZ_FILL_CLEAR;   return 1; }
+    if (!strcmp(s, "zoom"))    { *out = FZ_FILL_ZOOM;    return 1; }
     return 0;
 }
 
@@ -450,6 +451,14 @@ int fz_layout_line(char *line, size_t cap, char *extra, size_t extra_cap)
     if (!fz_layout_active())
         return 0;
     f = &g_file[g_depth - 1];
+    {
+        /* FZ_LAYOUT_DUMP=1: every line of every screen, as the disc has it. */
+        static int dump = -1;
+        if (dump < 0)
+            dump = getenv("FZ_LAYOUT_DUMP") != NULL;
+        if (dump)
+            fprintf(stderr, "[FZLINE] %s: %s\n", f->screen, line);
+    }
     sp = strchr(line, ' ');
     if (!sp || (size_t)(sp - line) >= sizeof key)
         return 0;
@@ -460,11 +469,19 @@ int fz_layout_line(char *line, size_t cap, char *extra, size_t extra_cap)
 
     /* Lists the game exempts from its own squish (DoWidescreenSquish false,
      * 122 of them) draw without it: off to one side of everything else in
-     * the picture. With the squish held on everywhere they take it too. */
+     * the picture. With the squish held on everywhere they take it too.
+     *
+     * Not the spinners, though: the rows of tiles to choose a car, a class,
+     * a track or an event from. What the flag does (sub_00194160, the only
+     * reader) is lay the items out 0.75 as wide in widescreen -- the game's
+     * own squish for a list in a menu it shows stretched. Under the held
+     * squish the tiles took both and came out at 3/4 of their width; left
+     * as the disc has them they are in proportion, as on a 4:3 screen. */
     {
         size_t kl = strlen(lkey);
 
-        if (!f->keep && kl >= 18 && !strcmp(lkey + kl - 18, "dowidescreensquish")) {
+        if (!f->keep && kl >= 18 && !strcmp(lkey + kl - 18, "dowidescreensquish") &&
+            !strstr(lkey, "spinner") && !strstr(lkey, "chicklet")) {
             if (strncmp(sp + 1, "false", 5) || (size_t)(sp - line) + 6 >= cap)
                 return 0;
             memcpy(sp + 1, "true", 5);

@@ -88,6 +88,7 @@ set(GAME_SOURCES
     src/recomp_manual.c
     src/fz_layout.c
     src/fz_backdrop.c
+    src/fz_missing.c
     ${CMAKE_CURRENT_BINARY_DIR}/fz_layout_rules.c
 )
 
@@ -192,5 +193,20 @@ recomp_title_widescreen(NATIVE REGISTER 181 OWN_2D)
 # written to the file the game reads, then the game started. Beside the
 # game's executable, as forza_launcher.
 if(COMMAND recomp_add_launcher)
-    recomp_add_launcher(forza_launcher $<TARGET_FILE_NAME:${PROJECT_NAME}>)
+    # XBE_SHA1: the default.xbe the code is lifted from (Forza Motorsport,
+    # title 4D53006E). Shared without the game, the launcher takes the
+    # player's disc image and checks it against this.
+    recomp_add_launcher(forza_launcher $<TARGET_FILE_NAME:${PROJECT_NAME}>
+        XBE_SHA1 013ce5887f4fc9185fc4f3a4cbbd30a74aa3b5b6)
+endif()
+
+# Local performance diagnosis: map native addresses back to generated functions.
+if(MSVC OR WIN32)
+    target_link_options(${PROJECT_NAME} PRIVATE "LINKER:/MAP:${CMAKE_BINARY_DIR}/forza_recomp.map")
+endif()
+# The clang driver is not MSVC, so the /DEBUG above never reaches lld-link:
+# no PDB, and RECOMP_SAMPLE cannot name a single generated function. Public
+# symbols only, so nothing recompiles.
+if(WIN32 AND NOT MSVC)
+    target_link_options(${PROJECT_NAME} PRIVATE "LINKER:/DEBUG")
 endif()

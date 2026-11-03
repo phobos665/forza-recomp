@@ -83,6 +83,16 @@ The toolkit's own requirements apply: see its `docs/GETTING_STARTED.md`.
    cmake --build build/Release --target forza_recomp forza_launcher --parallel
    ```
 
+## Register promotion
+
+`config/regpromote/4D53006E.json` lists the 400 lifted functions a race
+spends most of its time in (sampled with `RECOMP_SAMPLE`, Oct 2026). For
+those, `scripts/recompile.sh` has the lifter keep the guest registers in C
+locals instead of the thread-local register file (the toolkit's
+`tools/recomp/regpromote.py`), which took a race from about 20 fps to a steady
+30. Regenerate the list from a new profile when the hot code changes: it is
+the leaf table of `RECOMP_SAMPLE_DUMP`, `sub_` entries only, as addresses.
+
 ## Running
 
 ```bash
